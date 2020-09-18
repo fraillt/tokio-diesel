@@ -94,6 +94,12 @@ where
     where
         R: Send + 'static,
         Func: FnOnce(&Conn) -> QueryResult<R> + Send + 'static;
+
+    async fn transaction_with_err<T, E, Func>(&self, f: Func) -> Result<T, E>
+        where
+            T: Send + 'static,
+            E: From<diesel::result::Error> + From<AsyncError> + Send + 'static,
+            Func: FnOnce(&Conn) -> Result<T, E> + Send + 'static;
 }
 
 #[async_trait]
@@ -126,6 +132,20 @@ where
             conn.transaction(|| f(&*conn)).map_err(AsyncError::Error)
         }).await.expect("The task being joined has panicked")
     }
+
+    async fn transaction_with_err<T, E, Func>(&self, f: Func) -> Result<T, E>
+        where
+            T: Send + 'static,
+            E: From<diesel::result::Error> + From<AsyncError> + Send + 'static,
+            Func: FnOnce(&Conn) -> Result<T, E> + Send + 'static,
+    {
+        let self_ = self.clone();
+        task::spawn_blocking(move || {
+            let conn = self_.get().map_err(AsyncError::Checkout)?;
+            conn.transaction(|| f(&*conn))
+        }).await.expect("The task being joined has panicked")
+    }
+
 }
 
 #[async_trait]
